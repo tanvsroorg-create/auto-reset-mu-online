@@ -3,10 +3,16 @@ name: Build MuAutoReset
 
 on:
   push:
+    branches:
+      - main
   workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   build:
+    name: Build MuAutoReset
     runs-on: windows-latest
 
     steps:
@@ -19,17 +25,76 @@ jobs:
       - name: Setup NuGet
         uses: NuGet/setup-nuget@v2
 
-      - name: Build project
+      - name: Restore and build
         shell: pwsh
         run: |
-          msbuild .\MuAutoReset.csproj /restore /p:Configuration=Release /p:Platform=x86
+          $project = Get-ChildItem -Path . -Filter "MuAutoReset.csproj" -Recurse |
+            Select-Object -First 1
 
-      - name: Upload EXE
+          if (-not $project) {
+            Write-Error "Khong tim thay MuAutoReset.csproj"
+            exit 1
+          }
+
+          Write-Host "Project: $($project.FullName)"
+
+          msbuild $project.FullName /restore /m /p:Configuration=Release /p:Platform=x86 /v:minimal
+
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
+
+      - name: Find build output
+        id: find_output
+        shell: pwsh
+        run: |
+          $files = Get-ChildItem -Path . -Recurse -File |
+            Where-Object {
+              $_.Name -eq "MuAutoReset.exe" -or
+              ($_.Extension -in @(".exe", ".dll", ".json") -and
+               $_.FullName -match '[\\/]bin[\\/]')
+            }
+
+          $files | ForEach-Object {
+            Write-Host $_.FullName
+          }
+
+          $exe = $files | Where-Object {
+            $_.Name -eq "MuAutoReset.exe"
+          } | Select-Object -First 1
+
+          if (-not $exe) {
+            Write-Error "Build chua tao MuAutoReset.exe. Kiem tra log va OutputPath trong csproj."
+            exit 1
+          }
+
+          "exe_path=$($exe.FullName)" >> $env:GITHUB_OUTPUT
+
+      - name: Prepare artifact
+        shell: pwsh
+        run: |
+          $dest = Join-Path $env:GITHUB_WORKSPACE "publish"
+          New-Item -ItemType Directory -Path $dest -Force | Out-Null
+
+          $exe = "${{ steps.find_output.outputs.exe_path }}"
+          Copy-Item -LiteralPath $exe -Destination $dest
+
+          $sourceDir = Split-Path -Parent $exe
+          Get-ChildItem -Path $sourceDir -File |
+            Where-Object {
+              $_.Extension -in @(".dll", ".json", ".config", ".xml")
+            } |
+            ForEach-Object {
+              Copy-Item -LiteralPath $_.FullName -Destination $dest -Force
+            }
+
+          Write-Host "Artifact files:"
+          Get-ChildItem -Path $dest
+
+      - name: Upload EXE artifact
         uses: actions/upload-artifact@v4
         with:
           name: MuAutoReset-Release
-          path: |
-            bin/Release/**/*.exe
-            bin/Release/**/*.dll
-            bin/Release/**/*.json
-          if-no-files-found: warn
+          path: publish/*
+          if-no-files-found: error
+          retention-days: 7

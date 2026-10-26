@@ -1,10 +1,9 @@
 
-name: Build Windows EXE
+name: Build MuAutoReset
 
 on:
-  workflow_dispatch:
   push:
-    branches: [main]
+  workflow_dispatch:
 
 jobs:
   build:
@@ -14,16 +13,23 @@ jobs:
       - name: Checkout source
         uses: actions/checkout@v4
 
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: 8.0.x
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Setup NuGet
+        uses: NuGet/setup-nuget@v2
 
       - name: Build project
-        run: dotnet publish MuAutoReset.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o publish
+        shell: pwsh
+        run: |
+          msbuild .\MuAutoReset.csproj /restore /p:Configuration=Release /p:Platform=x86
 
       - name: Upload EXE
         uses: actions/upload-artifact@v4
         with:
-          name: MuAutoReset-win-x64
-          path: publish/
+          name: MuAutoReset-Release
+          path: |
+            bin/Release/**/*.exe
+            bin/Release/**/*.dll
+            bin/Release/**/*.json
+          if-no-files-found: warn

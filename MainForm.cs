@@ -775,8 +775,14 @@ public sealed class MainForm : Form
                     RefreshRuntimeDisplay();
                     // Click NPC bình thường, chưa giữ phím Alt.
                     ClickClientPoint(hwnd, NpcPixelX, NpcPixelY);
-                    await Task.Delay(700);
-                    await Task.Delay(250);
+
+                    // Chờ NPC mở hội thoại/menu hoàn toàn rồi mới chọn Devil 5.
+                    runtime.Status = "Auto Devil: đã click NPC, chờ 2 giây để menu mở";
+                    RefreshRuntimeDisplay();
+                    await Task.Delay(2000);
+
+                    runtime.Status = "Auto Devil: đang chọn Devil 5";
+                    RefreshRuntimeDisplay();
                     ClickClientPoint(hwnd, Devil5PixelX, Devil5PixelY);
                     Log($"PID {runtime.Pid}: đã click lựa chọn Devil 5 (660,380).");
 

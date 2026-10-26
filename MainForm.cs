@@ -742,7 +742,10 @@ public sealed class MainForm : Form
                     runtime.Status = "Auto Devil: gửi lệnh /move Event Square";
                     RefreshRuntimeDisplay();
                     SendChatCommand(runtime, "/move Event Square");
-                    await Task.Delay(800);
+                    // Cho server thời gian xử lý lệnh /move và chuyển bản đồ trước khi ghi tọa độ.
+                    runtime.Status = "Auto Devil: chờ 5 giây sau lệnh /move";
+                    RefreshRuntimeDisplay();
+                    await Task.Delay(5000);
 
                     runtime.Status = "Auto Devil: đang đi tới 222,95";
                     RefreshRuntimeDisplay();
@@ -763,24 +766,16 @@ public sealed class MainForm : Form
                     if (!arrived)
                         throw new TimeoutException($"Không tới đúng X=222,Y=95 trong 90 giây (tọa độ đọc được: {runtime.X},{runtime.Y}).");
 
-                    runtime.Status = "Auto Devil: đã tới NPC, đang click";
+                    // Chờ thêm sau khi tọa độ đã khớp chính xác rồi mới tương tác NPC.
+                    runtime.Status = "Auto Devil: đã tới 222,95; chờ 5 giây trước khi click NPC";
                     RefreshRuntimeDisplay();
-                    await Task.Delay(300);
-                    // Giữ Alt trong lúc click NPC để kích hoạt tương tác; sau đó nhả Alt.
-                    PostMessageChecked(hwnd, WM_SYSKEYDOWN, (IntPtr)VK_MENU,
-                        (IntPtr)0x20000001, "Alt down");
-                    await Task.Delay(100);
-                    try
-                    {
-                        ClickClientPoint(hwnd, NpcPixelX, NpcPixelY);
-                        await Task.Delay(700);
-                    }
-                    finally
-                    {
-                        // Context bit + previous-state bit + transition bit for SYSKEYUP.
-                        PostMessageChecked(hwnd, WM_SYSKEYUP, (IntPtr)VK_MENU,
-                            (IntPtr)0xE0000001, "Alt up");
-                    }
+                    await Task.Delay(5000);
+
+                    runtime.Status = "Auto Devil: hết delay, đang click NPC";
+                    RefreshRuntimeDisplay();
+                    // Click NPC bình thường, chưa giữ phím Alt.
+                    ClickClientPoint(hwnd, NpcPixelX, NpcPixelY);
+                    await Task.Delay(700);
                     await Task.Delay(250);
                     ClickClientPoint(hwnd, Devil5PixelX, Devil5PixelY);
                     Log($"PID {runtime.Pid}: đã click lựa chọn Devil 5 (660,380).");

@@ -674,15 +674,44 @@ public sealed class MainForm : Form
             return;
         }
 
+        // Auto Devil hoạt động độc lập: tự gắn vào process được chọn nếu Auto Train/Reset chưa chạy.
         List<CharacterRuntime> targets = new();
         foreach (int pid in pids)
         {
             if (!_runtimes.TryGetValue(pid, out CharacterRuntime? runtime) || !runtime.Running)
             {
-                MessageBox.Show(this,
-                    $"PID {pid} chưa chạy. Hãy bấm 'Chạy nhân vật đã chọn' trước rồi chạy Auto Devil.",
-                    "Auto Devil", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                return;
+                try
+                {
+                    Process process = Process.GetProcessById(pid);
+                    if (process.HasExited)
+                    {
+                        process.Dispose();
+                        throw new InvalidOperationException("Process game đã thoát.");
+                    }
+
+                    var memory = new MemoryWriter(process);
+                    var timer = new System.Windows.Forms.Timer { Interval = (int)_poll.Value };
+                    runtime = new CharacterRuntime
+                    {
+                        Pid = pid,
+                        Process = process,
+                        Memory = memory,
+                        Timer = timer,
+                        Running = true,
+                        Status = "Sẵn sàng chạy Auto Devil độc lập"
+                    };
+                    timer.Tick += async (_, _) => await TickCharacterAsync(runtime);
+                    // Không start timer: không chạy vòng Auto Train/Reset.
+                    _runtimes[pid] = runtime;
+                    Log($"PID {pid}: đã gắn process cho Auto Devil độc lập; Auto Train/Reset không chạy.");
+                }
+                catch (Exception ex)
+                {
+                    MessageBox.Show(this,
+                        $"Không thể gắn Auto Devil vào PID {pid}: {ex.Message}",
+                        "Auto Devil", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
             }
             targets.Add(runtime);
         }

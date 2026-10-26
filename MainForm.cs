@@ -18,6 +18,12 @@ public sealed class MainForm : Form
     // Level
     private const int LevelBaseOffset = 0x1740BB4;
 
+    // XTeam 18.1.3: map ID address supplied as main.exe+1715A98.
+    private const int CurrentMapIdOffset = 0x1715A98;
+    // XTeam database[2] from the supplied config string. Treat as the send-function address.
+    private static readonly IntPtr PacketSendFunction = new(0x00E71445);
+    private readonly string _mapPacketConfigPath = Path.Combine(AppContext.BaseDirectory, "map_packets.json");
+
     // Pointer di chuyển và tọa độ đích
     private const int MoveBaseOffset = 0x181D014;
     private const int MoveOffset = 0x2198;
@@ -37,19 +43,7 @@ public sealed class MainForm : Form
     private const uint WM_KEYDOWN = 0x0100;
     private const uint WM_KEYUP = 0x0101;
     private const uint WM_CHAR = 0x0102;
-    private const uint WM_LBUTTONDOWN = 0x0201;
-    private const uint WM_LBUTTONUP = 0x0202;
-    private const uint WM_SYSKEYDOWN = 0x0104;
-    private const uint WM_SYSKEYUP = 0x0105;
-    private const int MK_LBUTTON = 0x0001;
     private const int VK_RETURN = 0x0D;
-    private const int VK_MENU = 0x12;
-
-    // Pixel tương đối theo vùng client, cố định theo thông tin người dùng cung cấp.
-    private const int NpcPixelX = 330;
-    private const int NpcPixelY = 275;
-    private const int Devil5PixelX = 660;
-    private const int Devil5PixelY = 380;
 
     [DllImport("user32.dll", SetLastError = true)]
     private static extern bool PostMessage(
@@ -117,33 +111,6 @@ public sealed class MainForm : Form
         Maximum = 1000,
         Value = 400,
         Width = 75
-    };
-
-
-    private readonly NumericUpDown _devilX = new()
-    {
-        Minimum = 0,
-        Maximum = ushort.MaxValue,
-        Width = 75
-    };
-
-    private readonly NumericUpDown _devilY = new()
-    {
-        Minimum = 0,
-        Maximum = ushort.MaxValue,
-        Width = 75
-    };
-
-    private readonly Button _autoDevil = new()
-    {
-        Text = "Auto Devil 5",
-        Width = 115
-    };
-
-    private readonly Button _testClick = new()
-    {
-        Text = "Test click (213,387)",
-        Width = 145
     };
 
     private readonly Button _refresh = new()
@@ -268,8 +235,6 @@ public sealed class MainForm : Form
         public int PollMs { get; set; } = 1500;
         public string ResetCommand { get; set; } = "/reset";
         public int ResetLevel { get; set; } = 400;
-        public int DevilX { get; set; }
-        public int DevilY { get; set; }
         public List<SpotConfig> Spots { get; set; } = new();
     }
 
@@ -287,8 +252,6 @@ public sealed class MainForm : Form
         LoadDefaults();
 
         _refresh.Click += (_, _) => RefreshProcesses();
-        _autoDevil.Click += async (_, _) => await RunAutoDevilSelectedAsync();
-        _testClick.Click += (_, _) => TestClickSelected();
         _start.Click += (_, _) => StartSelected();
         _stop.Click += (_, _) => StopSelected();
         _selectAll.Click += (_, _) => SetSelected(true);
@@ -482,7 +445,7 @@ public sealed class MainForm : Form
         toolbar.Controls.AddRange(new Control[]
         {
             _refresh, _start, _stop, _selectAll,
-            _unselectAll, _save, _load, _autoDevil, _testClick, _summary
+            _unselectAll, _save, _load, _summary
         });
 
         root.Controls.Add(toolbar, 0, 0);
@@ -515,8 +478,6 @@ public sealed class MainForm : Form
         AddSetting(settings, "Poll ms", _poll);
         AddSetting(settings, "Lệnh reset", _resetCommand);
         AddSetting(settings, "Reset level", _resetLevel);
-        AddSetting(settings, "Devil X", _devilX);
-        AddSetting(settings, "Devil Y", _devilY);
 
         settingsGroup.Controls.Add(settings);
         root.Controls.Add(settingsGroup, 0, 2);
@@ -669,275 +630,6 @@ public sealed class MainForm : Form
         {
             _refreshing = false;
         }
-    }
-
-    private async Task RunAutoDevilSelectedAsync()
-    {
-        int[] pids = GetSelectedPids().ToArray();
-        if (pids.Length == 0)
-        {
-            MessageBox.Show(this, "Hãy chọn nhân vật trước.", "Auto Devil",
-                MessageBoxButtons.OK, MessageBoxIcon.Information);
-            return;
-        }
-
-        // Auto Devil hoạt động độc lập: tự gắn vào process được chọn nếu Auto Train/Reset chưa chạy.
-        List<CharacterRuntime> targets = new();
-        foreach (int pid in pids)
-        {
-            if (!_runtimes.TryGetValue(pid, out CharacterRuntime? runtime) || !runtime.Running)
-            {
-                try
-                {
-                    Process process = Process.GetProcessById(pid);
-                    if (process.HasExited)
-                    {
-                        process.Dispose();
-                        throw new InvalidOperationException("Process game đã thoát.");
-                    }
-
-                    var memory = new MemoryWriter(process);
-                    var timer = new System.Windows.Forms.Timer { Interval = (int)_poll.Value };
-                    runtime = new CharacterRuntime
-                    {
-                        Pid = pid,
-                        Process = process,
-                        Memory = memory,
-                        Timer = timer,
-                        Running = true,
-                        Status = "Sẵn sàng chạy Auto Devil độc lập"
-                    };
-                    timer.Tick += async (_, _) => await TickCharacterAsync(runtime);
-                    // Không start timer: không chạy vòng Auto Train/Reset.
-                    _runtimes[pid] = runtime;
-                    Log($"PID {pid}: đã gắn process cho Auto Devil độc lập; Auto Train/Reset không chạy.");
-                }
-                catch (Exception ex)
-                {
-                    MessageBox.Show(this,
-                        $"Không thể gắn Auto Devil vào PID {pid}: {ex.Message}",
-                        "Auto Devil", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                    return;
-                }
-            }
-            targets.Add(runtime);
-        }
-
-        _autoDevil.Enabled = false;
-        try
-        {
-            foreach (CharacterRuntime runtime in targets)
-            {
-                while (runtime.Busy && runtime.Running)
-                    await Task.Delay(100);
-                if (!runtime.Running || runtime.Process.HasExited)
-                    continue;
-
-                bool resumeTimer = runtime.Timer.Enabled;
-                bool completedDevilEntry = false;
-                runtime.Timer.Stop();
-                runtime.Busy = true;
-                runtime.Status = "Auto Devil: bắt đầu";
-                RefreshRuntimeDisplay();
-                try
-                {
-                    IntPtr hwnd = runtime.Process.MainWindowHandle;
-                    if (hwnd == IntPtr.Zero)
-                        throw new InvalidOperationException("Không tìm thấy cửa sổ game.");
-
-                    // Vào event bằng lệnh chat, không click biểu tượng Devil nữa.
-                    runtime.Status = "Auto Devil: gửi lệnh /move Event Square";
-                    RefreshRuntimeDisplay();
-                    SendChatCommand(runtime, "/move Event Square");
-                    // Cho server thời gian xử lý lệnh /move và chuyển bản đồ trước khi ghi tọa độ.
-                    runtime.Status = "Auto Devil: chờ 5 giây sau lệnh /move";
-                    RefreshRuntimeDisplay();
-                    await Task.Delay(5000);
-
-                    runtime.Status = "Auto Devil: đang đi tới 222,95";
-                    RefreshRuntimeDisplay();
-                    SetExactMoveTarget(runtime, 222, 95);
-
-                    DateTime deadline = DateTime.UtcNow.AddSeconds(90);
-                    bool arrived = false;
-                    while (DateTime.UtcNow < deadline && runtime.Running && !runtime.Process.HasExited)
-                    {
-                        ReadCurrentCoordinates(runtime);
-                        if (runtime.X == 222 && runtime.Y == 95)
-                        {
-                            arrived = true;
-                            break;
-                        }
-                        await Task.Delay(250);
-                    }
-                    if (!arrived)
-                        throw new TimeoutException($"Không tới đúng X=222,Y=95 trong 90 giây (tọa độ đọc được: {runtime.X},{runtime.Y}).");
-
-                    // Chờ thêm sau khi tọa độ đã khớp chính xác rồi mới tương tác NPC.
-                    runtime.Status = "Auto Devil: đã tới 222,95; chờ 5 giây trước khi click NPC";
-                    RefreshRuntimeDisplay();
-                    await Task.Delay(5000);
-
-                    runtime.Status = "Auto Devil: hết delay, đang click NPC";
-                    RefreshRuntimeDisplay();
-                    // Click NPC bình thường, chưa giữ phím Alt.
-                    ClickClientPoint(hwnd, NpcPixelX, NpcPixelY);
-
-                    // Chờ NPC mở hội thoại/menu hoàn toàn rồi mới chọn Devil 5.
-                    runtime.Status = "Auto Devil: đã click NPC, chờ 2 giây để menu mở";
-                    RefreshRuntimeDisplay();
-                    await Task.Delay(2000);
-
-                    runtime.Status = "Auto Devil: đang chọn Devil 5";
-                    RefreshRuntimeDisplay();
-                    ClickClientPoint(hwnd, Devil5PixelX, Devil5PixelY);
-                    Log($"PID {runtime.Pid}: đã click lựa chọn Devil 5 (660,380).");
-
-                    // Chờ game chuyển vào Devil Square trước khi đọc lại pointer.
-                    runtime.Status = "Auto Devil: chờ vào Devil Square";
-                    RefreshRuntimeDisplay();
-                    await Task.Delay(2500);
-
-                    // Tọa độ bãi trong Devil Square được nhập riêng, không dùng bảng bãi train thường.
-                    ushort devilX = (ushort)_devilX.Value;
-                    ushort devilY = (ushort)_devilY.Value;
-
-                    if (runtime.AutoEnabled)
-                        SetAuto(runtime, false);
-
-                    runtime.Status = $"Auto Devil: di chuyển tới bãi ({devilX},{devilY})";
-                    RefreshRuntimeDisplay();
-                    SetExactMoveTarget(runtime, devilX, devilY);
-
-                    DateTime spotDeadline = DateTime.UtcNow.AddSeconds(120);
-                    bool atDevilSpot = false;
-                    while (DateTime.UtcNow < spotDeadline && runtime.Running && !runtime.Process.HasExited)
-                    {
-                        ReadCurrentCoordinates(runtime);
-                        // Dùng cùng dung sai ±8 của Auto Train khi tới bãi; tọa độ đích ghi vào memory vẫn chính xác.
-                        if (runtime.X.HasValue && runtime.Y.HasValue &&
-                            Math.Abs(runtime.X.Value - devilX) <= 8 &&
-                            Math.Abs(runtime.Y.Value - devilY) <= 8)
-                        {
-                            atDevilSpot = true;
-                            break;
-                        }
-                        await Task.Delay(300);
-                    }
-
-                    if (!atDevilSpot)
-                        throw new TimeoutException(
-                            $"Không tới bãi Devil ({devilX},{devilY}) trong 120 giây; tọa độ hiện tại {runtime.X},{runtime.Y}.");
-
-                    SetAuto(runtime, true, devilX, devilY);
-                    completedDevilEntry = true;
-                    runtime.Status = $"Devil 5: Auto tại ({devilX},{devilY})";
-                    Log($"PID {runtime.Pid}: đã tới bãi Devil ({devilX},{devilY}) và bật Auto.");
-                    RefreshRuntimeDisplay();
-                }
-                catch (Exception ex)
-                {
-                    runtime.Status = "Auto Devil lỗi";
-                    Log($"PID {runtime.Pid}: Auto Devil lỗi — {ex.Message}");
-                }
-                finally
-                {
-                    runtime.Busy = false;
-                    // Sau khi vào Devil Square, không bật lại timer Auto Train thường,
-                    // tránh timer gửi lệnh /move sang map train ngoài event.
-                    if (resumeTimer && !completedDevilEntry && runtime.Running && !_closing)
-                        runtime.Timer.Start();
-                }
-            }
-        }
-        finally
-        {
-            _autoDevil.Enabled = true;
-            RefreshRuntimeDisplay();
-        }
-    }
-
-    private void TestClickSelected()
-    {
-        List<int> pids = GetSelectedPids();
-        if (pids.Count == 0)
-        {
-            MessageBox.Show("Hãy tích chọn ít nhất một process MU Online trước.",
-                "Test click", MessageBoxButtons.OK, MessageBoxIcon.Information);
-            return;
-        }
-
-        int success = 0;
-        var errors = new List<string>();
-        foreach (int pid in pids)
-        {
-            try
-            {
-                using Process process = Process.GetProcessById(pid);
-                IntPtr hwnd = process.MainWindowHandle;
-                if (hwnd == IntPtr.Zero)
-                    throw new InvalidOperationException("Không tìm thấy cửa sổ game.");
-
-                ClickClientPoint(hwnd, 213, 387);
-                success++;
-                Log($"PID {pid}: đã gửi test click tại (213,387).");
-            }
-            catch (Exception ex)
-            {
-                errors.Add($"PID {pid}: {ex.Message}");
-                Log($"PID {pid}: test click lỗi — {ex.Message}");
-            }
-        }
-
-        string message = $"Đã gửi click (213,387) cho {success}/{pids.Count} process được chọn.";
-        if (errors.Count > 0)
-            message += Environment.NewLine + Environment.NewLine + string.Join(Environment.NewLine, errors);
-        MessageBox.Show(message, "Test click", MessageBoxButtons.OK,
-            errors.Count == 0 ? MessageBoxIcon.Information : MessageBoxIcon.Warning);
-    }
-
-    private static void ClickClientPoint(IntPtr hwnd, int x, int y)
-    {
-        // LPARAM của mouse message chứa tọa độ client: low word = X, high word = Y.
-        IntPtr lParam = (IntPtr)(((y & 0xFFFF) << 16) | (x & 0xFFFF));
-        PostMessageChecked(hwnd, WM_LBUTTONDOWN, (IntPtr)MK_LBUTTON, lParam,
-            $"mouse down ({x},{y})");
-        PostMessageChecked(hwnd, WM_LBUTTONUP, IntPtr.Zero, lParam,
-            $"mouse up ({x},{y})");
-    }
-
-    private static void PostMessageChecked(
-        IntPtr hwnd, uint message, IntPtr wParam, IntPtr lParam, string action)
-    {
-        if (hwnd == IntPtr.Zero)
-            throw new InvalidOperationException($"Không có cửa sổ để gửi {action}.");
-
-        if (!PostMessage(hwnd, message, wParam, lParam))
-        {
-            int error = Marshal.GetLastWin32Error();
-            throw new InvalidOperationException(
-                $"PostMessage thất bại khi gửi {action} (Win32 error {error}).");
-        }
-    }
-
-    private static void SetExactMoveTarget(CharacterRuntime runtime, ushort x, ushort y)
-    {
-        IntPtr moduleBase = runtime.Memory.GetModuleBaseAddress(runtime.Process, GameModule);
-        if (moduleBase == IntPtr.Zero)
-            throw new InvalidOperationException("Không tìm thấy module main.exe.");
-
-        uint pointerValue = runtime.Memory.ReadUInt32(IntPtr.Add(moduleBase, MoveBaseOffset));
-        if (pointerValue == 0)
-            throw new InvalidOperationException("Pointer tọa độ/di chuyển bằng 0.");
-
-        IntPtr pointerBase = new(unchecked((int)pointerValue));
-        IntPtr xAddress = IntPtr.Add(pointerBase, DestinationXOffset);
-        IntPtr yAddress = IntPtr.Add(pointerBase, DestinationYOffset);
-        runtime.Memory.WriteUInt16(xAddress, x);
-        runtime.Memory.WriteUInt16(yAddress, y);
-        if (runtime.Memory.ReadUInt16(xAddress) != x || runtime.Memory.ReadUInt16(yAddress) != y)
-            throw new InvalidOperationException("Không xác minh được tọa độ đích trong bộ nhớ.");
-        runtime.Memory.WriteUInt16(IntPtr.Add(pointerBase, MoveOffset), 2);
     }
 
     private void StartSelected()
@@ -1123,12 +815,11 @@ public sealed class MainForm : Form
             }
 
             // 1. Đọc level
-            IntPtr levelModuleBase = runtime.Memory.GetModuleBaseAddress(
-                runtime.Process, GameModule);
             IntPtr levelAddress = runtime.Memory.ResolvePointerChainAddress(
-                levelModuleBase,
+                runtime.Process,
+                GameModule,
                 LevelBaseOffset,
-                0);
+                new[] { 0 });
 
             if (levelAddress == IntPtr.Zero)
                 throw new InvalidOperationException(
@@ -1289,11 +980,31 @@ public sealed class MainForm : Form
             IntPtr pointerBase =
                 new(unchecked((int)pointerValue));
 
-            // 10. Gửi lệnh chuyển map
-            runtime.Status = $"Đang chuyển map: {spot.Map}";
-            Log($"PID {runtime.Pid}: gửi /move {spot.Map}");
+            // 10. Chỉ gửi packet khi map hiện tại khác map đích.
+            IntPtr mapIdAddress = IntPtr.Add(moduleBase, CurrentMapIdOffset);
+            ushort currentMapId = runtime.Memory.ReadUInt16(mapIdAddress);
+            MapPacketEntry? targetMap = LoadMapPackets()
+                .FirstOrDefault(m => string.Equals(m.Map, spot.Map, StringComparison.OrdinalIgnoreCase));
 
-            SendChatCommand(runtime, "/move " + spot.Map);
+            if (targetMap == null)
+                throw new InvalidOperationException(
+                    $"Chưa có mapId/packet cho '{spot.Map}' trong map_packets.json.");
+
+            if (currentMapId == targetMap.MapId)
+            {
+                runtime.Status = $"Đã ở map {spot.Map} (ID {currentMapId}); bỏ qua packet chuyển map";
+                Log($"PID {runtime.Pid}: map hiện tại đã là {spot.Map} (ID {currentMapId}), không gửi packet.");
+                // Không gửi chuyển map; tiếp tục xử lý tọa độ trong vòng tick kế tiếp.
+                return;
+            }
+
+            runtime.Status = $"Đang chuyển map bằng packet: {spot.Map}";
+            Log($"PID {runtime.Pid}: map {currentMapId} -> {targetMap.MapId} ({spot.Map}), gửi packet.");
+            using (var sender = new PacketSender(runtime.Process))
+            {
+                // Stub được port từ chuỗi lệnh AutoIt trong BuildPacketStub().
+                sender.SendPacket(targetMap.PacketHex, PacketSendFunction, BuildPacketStub);
+            }
 
             await Task.Delay(3000);
 
@@ -1417,9 +1128,10 @@ public sealed class MainForm : Form
 
         IntPtr autoBaseAddress =
             runtime.Memory.ResolvePointerChainAddress(
-                moduleBase,
+                runtime.Process,
+                GameModule,
                 AutoBaseOffset,
-                0);
+                new[] { 0 });
 
         if (autoBaseAddress == IntPtr.Zero)
             throw new InvalidOperationException("Không đọc được địa chỉ Auto.");
@@ -1443,6 +1155,56 @@ public sealed class MainForm : Form
         runtime.AutoEnabled = enabled;
     }
 
+
+    private List<MapPacketEntry> LoadMapPackets()
+    {
+        if (!File.Exists(_mapPacketConfigPath))
+            throw new FileNotFoundException("Không tìm thấy map_packets.json cạnh file EXE.", _mapPacketConfigPath);
+        return JsonSerializer.Deserialize<List<MapPacketEntry>>(
+            File.ReadAllText(_mapPacketConfigPath), new JsonSerializerOptions { PropertyNameCaseInsensitive = true })
+            ?? new List<MapPacketEntry>();
+    }
+
+    private static byte[] BuildPacketStub(IntPtr packetBuffer, IntPtr sendFunction, bool secondVariant)
+    {
+        // Port trực tiếp các lệnh AutoIt:
+        // pushad(); push(0); push(secondVariant ? 0 : 1);
+        // mov_ecx(packetBuffer); mov_eax(sendFunction); call_eax(); popad(); ret();
+        // Các hằng số 32-bit được ghi little-endian giống int2hex() trong AutoIt.
+        if (IntPtr.Size != 4)
+            throw new PlatformNotSupportedException(
+                "Stub AutoIt này dùng mã máy x86 32-bit. Hãy chạy ứng dụng C# x86 với client MU 32-bit.");
+
+        static void AppendUInt32(List<byte> bytes, uint value)
+        {
+            bytes.Add((byte)(value & 0xFF));
+            bytes.Add((byte)((value >> 8) & 0xFF));
+            bytes.Add((byte)((value >> 16) & 0xFF));
+            bytes.Add((byte)((value >> 24) & 0xFF));
+        }
+
+        var code = new List<byte>(23)
+        {
+            0x60,                   // pushad
+            0x68                    // push imm32 (0)
+        };
+        AppendUInt32(code, 0);
+        code.Add(0x68);             // push imm32 (sendpacket: 1; sendpacket2: 0)
+        AppendUInt32(code, secondVariant ? 0u : 1u);
+        code.Add(0xB9);             // mov ecx, packetBuffer
+        AppendUInt32(code, unchecked((uint)packetBuffer.ToInt32()));
+        code.Add(0xB8);             // mov eax, sendFunction
+        AppendUInt32(code, unchecked((uint)sendFunction.ToInt32()));
+        code.AddRange(new byte[] { 0xFF, 0xD0, 0x61, 0xC3 }); // call eax; popad; ret
+        return code.ToArray();
+    }
+
+    private sealed class MapPacketEntry
+    {
+        public string Map { get; set; } = "";
+        public ushort MapId { get; set; }
+        public string PacketHex { get; set; } = "";
+    }
 
     private void SendChatCommand(
         CharacterRuntime runtime, string command)
@@ -1624,8 +1386,6 @@ public sealed class MainForm : Form
                 PollMs = (int)_poll.Value,
                 ResetCommand = _resetCommand.Text,
                 ResetLevel = (int)_resetLevel.Value,
-                DevilX = (int)_devilX.Value,
-                DevilY = (int)_devilY.Value,
                 Spots = GetSpots()
             };
 
@@ -1668,9 +1428,6 @@ public sealed class MainForm : Form
                 config.ResetLevel,
                 (int)_resetLevel.Minimum,
                 (int)_resetLevel.Maximum);
-
-            _devilX.Value = Math.Clamp(config.DevilX, (int)_devilX.Minimum, (int)_devilX.Maximum);
-            _devilY.Value = Math.Clamp(config.DevilY, (int)_devilY.Minimum, (int)_devilY.Maximum);
 
             _spots.Rows.Clear();
 

@@ -1052,11 +1052,12 @@ public sealed class MainForm : Form
             }
 
             // 1. Đọc level
+            IntPtr levelModuleBase = runtime.Memory.GetModuleBaseAddress(
+                runtime.Process, GameModule);
             IntPtr levelAddress = runtime.Memory.ResolvePointerChainAddress(
-                runtime.Process,
-                GameModule,
+                levelModuleBase,
                 LevelBaseOffset,
-                new[] { 0 });
+                0);
 
             if (levelAddress == IntPtr.Zero)
                 throw new InvalidOperationException(
@@ -1345,10 +1346,9 @@ public sealed class MainForm : Form
 
         IntPtr autoBaseAddress =
             runtime.Memory.ResolvePointerChainAddress(
-                runtime.Process,
-                GameModule,
+                moduleBase,
                 AutoBaseOffset,
-                new[] { 0 });
+                0);
 
         if (autoBaseAddress == IntPtr.Zero)
             throw new InvalidOperationException("Không đọc được địa chỉ Auto.");

@@ -140,6 +140,12 @@ public sealed class MainForm : Form
         Width = 115
     };
 
+    private readonly Button _testClick = new()
+    {
+        Text = "Test click (213,387)",
+        Width = 145
+    };
+
     private readonly Button _refresh = new()
     {
         Text = "Làm mới",
@@ -282,6 +288,7 @@ public sealed class MainForm : Form
 
         _refresh.Click += (_, _) => RefreshProcesses();
         _autoDevil.Click += async (_, _) => await RunAutoDevilSelectedAsync();
+        _testClick.Click += (_, _) => TestClickSelected();
         _start.Click += (_, _) => StartSelected();
         _stop.Click += (_, _) => StopSelected();
         _selectAll.Click += (_, _) => SetSelected(true);
@@ -475,7 +482,7 @@ public sealed class MainForm : Form
         toolbar.Controls.AddRange(new Control[]
         {
             _refresh, _start, _stop, _selectAll,
-            _unselectAll, _save, _load, _autoDevil, _summary
+            _unselectAll, _save, _load, _autoDevil, _testClick, _summary
         });
 
         root.Controls.Add(toolbar, 0, 0);
@@ -848,6 +855,45 @@ public sealed class MainForm : Form
             _autoDevil.Enabled = true;
             RefreshRuntimeDisplay();
         }
+    }
+
+    private void TestClickSelected()
+    {
+        List<int> pids = GetSelectedPids();
+        if (pids.Count == 0)
+        {
+            MessageBox.Show("Hãy tích chọn ít nhất một process MU Online trước.",
+                "Test click", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+
+        int success = 0;
+        var errors = new List<string>();
+        foreach (int pid in pids)
+        {
+            try
+            {
+                using Process process = Process.GetProcessById(pid);
+                IntPtr hwnd = process.MainWindowHandle;
+                if (hwnd == IntPtr.Zero)
+                    throw new InvalidOperationException("Không tìm thấy cửa sổ game.");
+
+                ClickClientPoint(hwnd, 213, 387);
+                success++;
+                Log($"PID {pid}: đã gửi test click tại (213,387).");
+            }
+            catch (Exception ex)
+            {
+                errors.Add($"PID {pid}: {ex.Message}");
+                Log($"PID {pid}: test click lỗi — {ex.Message}");
+            }
+        }
+
+        string message = $"Đã gửi click (213,387) cho {success}/{pids.Count} process được chọn.";
+        if (errors.Count > 0)
+            message += Environment.NewLine + Environment.NewLine + string.Join(Environment.NewLine, errors);
+        MessageBox.Show(message, "Test click", MessageBoxButtons.OK,
+            errors.Count == 0 ? MessageBoxIcon.Information : MessageBoxIcon.Warning);
     }
 
     private static void ClickClientPoint(IntPtr hwnd, int x, int y)

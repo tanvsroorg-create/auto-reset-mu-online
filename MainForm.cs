@@ -959,8 +959,8 @@ public sealed class MainForm : Form
                 return;
             }
 
-            // 9. Lấy địa chỉ hiện tại
-            IntPtr moduleBase = runtime.Memory.GetModuleBaseAddress(
+            // 9. Lấy địa chỉ hiện tại (dùng lại moduleBase đã khai báo ở đầu hàm)
+            moduleBase = runtime.Memory.GetModuleBaseAddress(
                 runtime.Process, GameModule);
 
             if (moduleBase == IntPtr.Zero)

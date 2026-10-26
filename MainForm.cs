@@ -46,8 +46,6 @@ public sealed class MainForm : Form
     private const int VK_MENU = 0x12;
 
     // Pixel tương đối theo vùng client, cố định theo thông tin người dùng cung cấp.
-    private const int EventPixelX = 25;
-    private const int EventPixelY = 225;
     private const int NpcPixelX = 330;
     private const int NpcPixelY = 275;
     private const int Devil5PixelX = 660;
@@ -711,13 +709,10 @@ public sealed class MainForm : Form
                     if (hwnd == IntPtr.Zero)
                         throw new InvalidOperationException("Không tìm thấy cửa sổ game.");
 
-                    ClickClientPoint(hwnd, EventPixelX, EventPixelY);
-                    await Task.Delay(400);
-
-                    // Theo yêu cầu: đúng một lần nhấn Enter sau khi click icon.
-                    PostMessageChecked(hwnd, WM_KEYDOWN, (IntPtr)VK_RETURN, IntPtr.Zero, "Enter down");
-                    await Task.Delay(80);
-                    PostMessageChecked(hwnd, WM_KEYUP, (IntPtr)VK_RETURN, IntPtr.Zero, "Enter up");
+                    // Vào event bằng lệnh chat, không click biểu tượng Devil nữa.
+                    runtime.Status = "Auto Devil: gửi lệnh /move Event Square";
+                    RefreshRuntimeDisplay();
+                    SendChatCommand(runtime, "/move Event Square");
                     await Task.Delay(800);
 
                     runtime.Status = "Auto Devil: đang đi tới 222,95";

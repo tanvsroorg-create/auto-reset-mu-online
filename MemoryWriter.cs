@@ -69,14 +69,35 @@ public sealed class MemoryWriter : IDisposable
         return address;
     }
 
-    private byte[] Read(IntPtr address, int size)
+private byte[] Read(IntPtr address, int size)
+{
+    ThrowIfDisposed();
+
+    byte[] buffer = new byte[size];
+
+    bool success = ReadProcessMemory(
+        _handle,
+        address,
+        buffer,
+        size,
+        out IntPtr read);
+
+    long bytesRead = read.ToInt64();
+
+    if (!success || bytesRead != size)
     {
-        ThrowIfDisposed();
-        byte[] buffer = new byte[size];
-        if (!ReadProcessMemory(_handle, address, buffer, size, out IntPtr read) || read.ToInt64() != size)
-            throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error(), $"Đọc bộ nhớ thất bại tại 0x{address.ToInt64():X}.");
-        return buffer;
+        int error = Marshal.GetLastWin32Error();
+
+        throw new System.ComponentModel.Win32Exception(
+            error,
+            $"ReadProcessMemory thất bại: " +
+            $"Address=0x{address.ToInt64():X}, " +
+            $"Size={size}, Read={bytesRead}, " +
+            $"Win32Error={error}");
     }
+
+    return buffer;
+}
 
     private void Write(IntPtr address, byte[] buffer)
     {
